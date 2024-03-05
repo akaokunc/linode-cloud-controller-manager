@@ -36,7 +36,7 @@ var (
 	errNoNodesAvailable = errors.New("No nodes available for nodebalancer")
 	errInvalidFWConfig  = errors.New("Specify either an allowList or a denyList for a firewall")
 	errTooManyFirewalls = errors.New("Too many firewalls attached to a nodebalancer")
-	errTooManyIPs = errors.New("too many IPs in this ACL, will exceed rules per firewall limit")
+	errTooManyIPs       = errors.New("too many IPs in this ACL, will exceed rules per firewall limit")
 )
 
 type lbNotFoundError struct {
@@ -513,20 +513,14 @@ func (l *loadbalancers) updateNodeBalancer(ctx context.Context, clusterName stri
 	}
 
 	connThrottle := getConnectionThrottle(service)
-	if connThrottle != nb.ClientConnThrottle {
+	tags := l.getLoadBalancerTags(ctx, clusterName, service)
+
+	if (connThrottle != nb.ClientConnThrottle) || (!reflect.DeepEqual(nb.Tags, tags)) {
+
 		update := nb.GetUpdateOptions()
 		update.ClientConnThrottle = &connThrottle
-		nb, err = l.client.UpdateNodeBalancer(ctx, nb.ID, update)
-		if err != nil {
-			sentry.CaptureError(ctx, err)
-			return err
-		}
-	}
-
-	tags := l.getLoadBalancerTags(ctx, clusterName, service)
-	if !reflect.DeepEqual(nb.Tags, tags) {
-		update := nb.GetUpdateOptions()
 		update.Tags = &tags
+
 		nb, err = l.client.UpdateNodeBalancer(ctx, nb.ID, update)
 		if err != nil {
 			sentry.CaptureError(ctx, err)
