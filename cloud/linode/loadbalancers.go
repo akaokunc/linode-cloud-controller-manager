@@ -296,12 +296,6 @@ func (l *loadbalancers) updateNodeBalancer(
 			return err
 		}
 
-		// Add all of the Nodes to the config
-		var newNBNodes []linodego.NodeBalancerNodeCreateOptions
-		for _, node := range nodes {
-			newNBNodes = append(newNBNodes, l.buildNodeBalancerNodeCreateOptions(node, port.NodePort))
-		}
-
 		// Look for an existing config for this port
 		var currentNBCfg *linodego.NodeBalancerConfig
 		for i := range nbCfgs {
@@ -313,8 +307,8 @@ func (l *loadbalancers) updateNodeBalancer(
 		}
 
 		// If there's no existing config, create it
-		var rebuildOpts linodego.NodeBalancerConfigRebuildOptions
 		if currentNBCfg == nil {
+			klog.Infof("Creating new NB config for nodebalancer %d.", nb.ID)
 			createOpts := newNBCfg.GetCreateOptions()
 
 			currentNBCfg, err = l.client.CreateNodeBalancerConfig(ctx, nb.ID, createOpts)
@@ -322,21 +316,71 @@ func (l *loadbalancers) updateNodeBalancer(
 				sentry.CaptureError(ctx, err)
 				return fmt.Errorf("[port %d] error creating NodeBalancer config: %v", int(port.Port), err)
 			}
-			rebuildOpts = currentNBCfg.GetRebuildOptions()
+			createOpts = currentNBCfg.GetCreateOptions()
+
+			// Add all of the Nodes to the config
+			var newNBNodes []linodego.NodeBalancerNodeCreateOptions
+			for _, node := range nodes {
+				newNBNodes = append(newNBNodes, l.buildNodeBalancerNodeCreateOptions(node, port.NodePort))
+			}
 
 			// SSLCert and SSLKey return <REDACTED> from the API, so copy the
 			// value that we sent in create for the rebuild
+			createOpts.SSLCert = newNBCfg.SSLCert
+			createOpts.SSLKey = newNBCfg.SSLKey
+			createOpts.Nodes = newNBNodes
+
+			if _, err = l.client.CreateNodeBalancerConfig(ctx, nb.ID, createOpts); err != nil {
+				sentry.CaptureError(ctx, err)
+				return fmt.Errorf("[port %d] error creating NodeBalancer config: %v", int(port.Port), err)
+			}
+
+		} else {
+			klog.Infof("Rebuilding NB config for nodebalancer %d.", nb.ID)
+			rebuildOpts := currentNBCfg.GetRebuildOptions()
 			rebuildOpts.SSLCert = newNBCfg.SSLCert
 			rebuildOpts.SSLKey = newNBCfg.SSLKey
-		} else {
-			rebuildOpts = newNBCfg.GetRebuildOptions()
-		}
 
-		rebuildOpts.Nodes = newNBNodes
+			currentNBNodes, err := l.client.ListNodeBalancerNodes(ctx, nb.ID, currentNBCfg.ID, nil)
+			if err != nil {
+				klog.Fatal(err)
+			}
+			klog.Infof("Nodebalancer %d had nodes %s", nb.ID, currentNBNodes)
 
-		if _, err = l.client.RebuildNodeBalancerConfig(ctx, nb.ID, currentNBCfg.ID, rebuildOpts); err != nil {
-			sentry.CaptureError(ctx, err)
-			return fmt.Errorf("[port %d] error rebuilding NodeBalancer config: %v", int(port.Port), err)
+			oldNBNodes := make([]linodego.NodeBalancerConfigRebuildNodeOptions, len(currentNBNodes))
+			for i, node := range currentNBNodes {
+				oldNBNodes[i] = linodego.NodeBalancerConfigRebuildNodeOptions{
+					NodeBalancerNodeCreateOptions: node.GetCreateOptions(),
+					ID:                            node.ID,
+				}
+			}
+
+			var newNBNodes []linodego.NodeBalancerConfigRebuildNodeOptions
+			// filter all existing nodes add new nodes
+			for _, node := range nodes {
+				nodeAddr := fmt.Sprintf("%v:%v", getNodePrivateIP(node), int(port.Port))
+				nodeAdd := true
+				for _, oldNode := range oldNBNodes {
+					if nodeAddr == oldNode.Address {
+						// add existing node
+						newNBNodes = append(newNBNodes, oldNode)
+						nodeAdd = false
+						break
+					}
+				}
+				if nodeAdd {
+					// add newly added node
+					newNBNodes = append(newNBNodes, l.buildNewNodeBalancerNodeConfigRebuildOptions(node, port.Port))
+				}
+			}
+			rebuildOpts.Nodes = newNBNodes
+			klog.Infof("Nodebalancer %d requesting new list of nodes %s", nb.ID, newNBNodes)
+
+			// nodebalancer exists, rebuild the opts here:
+			if _, err = l.client.RebuildNodeBalancerConfig(ctx, nb.ID, currentNBCfg.ID, rebuildOpts); err != nil {
+				sentry.CaptureError(ctx, err)
+				return fmt.Errorf("[port %d] error rebuilding NodeBalancer config: %v", int(port.Port), err)
+			}
 		}
 	}
 
@@ -680,6 +724,20 @@ func (l *loadbalancers) buildNodeBalancerNodeCreateOptions(node *v1.Node, nodePo
 		Label:  coerceString(node.Name, 3, 32, "node-"),
 		Mode:   "accept",
 		Weight: 100,
+	}
+}
+
+// this function is only for creating new nodebalancer node, for reusing the existing one, just provide the original node with ID
+func (l *loadbalancers) buildNewNodeBalancerNodeConfigRebuildOptions(node *v1.Node, nodePort int32) linodego.NodeBalancerConfigRebuildNodeOptions {
+	return linodego.NodeBalancerConfigRebuildNodeOptions{
+		NodeBalancerNodeCreateOptions: linodego.NodeBalancerNodeCreateOptions{
+			Address: fmt.Sprintf("%v:%v", getNodePrivateIP(node), nodePort),
+			// NodeBalancer backends must be 3-32 chars in length
+			// If < 3 chars, pad node name with "node-" prefix
+			Label:  coerceString(node.Name, 3, 32, "node-"),
+			Mode:   "accept",
+			Weight: 100,
+		},
 	}
 }
 

@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/linode/linodego"
-	"golang.org/x/sync/errgroup"
 	"golang.org/x/exp/slices"
+	"golang.org/x/sync/errgroup"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -165,7 +165,7 @@ func (r *routes) CreateRoute(ctx context.Context, clusterName string, nameHint s
 
 		ipRanges := append(iface.IPRanges, route.DestinationCIDR)
 		interfaceUpdateOptions := linodego.InstanceConfigInterfaceUpdateOptions{
-			IPRanges: ipRanges,
+			IPRanges: &ipRanges,
 		}
 		resp, err := r.client.UpdateInstanceConfigInterface(ctx, instance.ID, configs[0].ID, iface.ID, interfaceUpdateOptions)
 		if err != nil {
@@ -203,7 +203,7 @@ func (r *routes) DeleteRoute(ctx context.Context, clusterName string, route *clo
 		}
 
 		interfaceUpdateOptions := linodego.InstanceConfigInterfaceUpdateOptions{
-			IPRanges: ipRanges,
+			IPRanges: &ipRanges,
 		}
 		resp, err := r.client.UpdateInstanceConfigInterface(ctx, instance.ID, configs[0].ID, iface.ID, interfaceUpdateOptions)
 		if err != nil {
