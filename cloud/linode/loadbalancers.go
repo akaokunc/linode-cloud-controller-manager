@@ -345,7 +345,7 @@ func (l *loadbalancers) updateNodeBalancer(
 			if err != nil {
 				klog.Fatal(err)
 			}
-			klog.Infof("Nodebalancer %d had nodes %s", nb.ID, currentNBNodes)
+			klog.Infof("Nodebalancer %d had nodes %v", nb.ID, currentNBNodes)
 
 			oldNBNodes := make([]linodego.NodeBalancerConfigRebuildNodeOptions, len(currentNBNodes))
 			for i, node := range currentNBNodes {
@@ -374,7 +374,7 @@ func (l *loadbalancers) updateNodeBalancer(
 				}
 			}
 			rebuildOpts.Nodes = newNBNodes
-			klog.Infof("Nodebalancer %d requesting new list of nodes %s", nb.ID, newNBNodes)
+			klog.Infof("Nodebalancer %d requesting new list of nodes %v", nb.ID, newNBNodes)
 
 			// nodebalancer exists, rebuild the opts here:
 			if _, err = l.client.RebuildNodeBalancerConfig(ctx, nb.ID, currentNBCfg.ID, rebuildOpts); err != nil {
