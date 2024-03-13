@@ -289,13 +289,6 @@ func (l *loadbalancers) updateNodeBalancer(
 			return err
 		}
 
-		// Construct a new config for this port
-		newNBCfg, err := l.buildNodeBalancerConfig(ctx, service, int(port.Port))
-		if err != nil {
-			sentry.CaptureError(ctx, err)
-			return err
-		}
-
 		// Look for an existing config for this port
 		var currentNBCfg *linodego.NodeBalancerConfig
 		for i := range nbCfgs {
@@ -308,26 +301,24 @@ func (l *loadbalancers) updateNodeBalancer(
 
 		// If there's no existing config, create it
 		if currentNBCfg == nil {
-			klog.Infof("Creating new NB config for nodebalancer %d.", nb.ID)
-			createOpts := newNBCfg.GetCreateOptions()
-
-			currentNBCfg, err = l.client.CreateNodeBalancerConfig(ctx, nb.ID, createOpts)
+			// Construct a new config for this port
+			newNBCfg, err := l.buildNodeBalancerConfig(ctx, service, int(port.Port))
 			if err != nil {
 				sentry.CaptureError(ctx, err)
-				return fmt.Errorf("[port %d] error creating NodeBalancer config: %v", int(port.Port), err)
+				return err
 			}
-			createOpts = currentNBCfg.GetCreateOptions()
-
-			// Add all of the Nodes to the config
-			var newNBNodes []linodego.NodeBalancerNodeCreateOptions
-			for _, node := range nodes {
-				newNBNodes = append(newNBNodes, l.buildNodeBalancerNodeCreateOptions(node, port.NodePort))
-			}
+			klog.Infof("Creating new NB config for nodebalancer %d.", nb.ID)
+			createOpts := newNBCfg.GetCreateOptions()
 
 			// SSLCert and SSLKey return <REDACTED> from the API, so copy the
 			// value that we sent in create for the rebuild
 			createOpts.SSLCert = newNBCfg.SSLCert
 			createOpts.SSLKey = newNBCfg.SSLKey
+			// Add all of the Nodes to the config
+			var newNBNodes []linodego.NodeBalancerNodeCreateOptions
+			for _, node := range nodes {
+				newNBNodes = append(newNBNodes, l.buildNodeBalancerNodeCreateOptions(node, port.NodePort))
+			}
 			createOpts.Nodes = newNBNodes
 
 			if _, err = l.client.CreateNodeBalancerConfig(ctx, nb.ID, createOpts); err != nil {
@@ -338,8 +329,8 @@ func (l *loadbalancers) updateNodeBalancer(
 		} else {
 			klog.Infof("Rebuilding NB config for nodebalancer %d.", nb.ID)
 			rebuildOpts := currentNBCfg.GetRebuildOptions()
-			rebuildOpts.SSLCert = newNBCfg.SSLCert
-			rebuildOpts.SSLKey = newNBCfg.SSLKey
+			rebuildOpts.SSLCert = currentNBCfg.SSLCert
+			rebuildOpts.SSLKey = currentNBCfg.SSLKey
 
 			currentNBNodes, err := l.client.ListNodeBalancerNodes(ctx, nb.ID, currentNBCfg.ID, nil)
 			if err != nil {
