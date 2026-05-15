@@ -146,6 +146,15 @@ func (nc *nodeCache) refreshInstances(ctx context.Context, client client.Client)
 		newNodes[instance.ID] = node
 	}
 
+	// Refuse to replace a non-empty cache with an empty result. An empty
+	// response from ListInstances most likely indicates a transient API
+	// error or account issue, not that all nodes have been legitimately
+	// removed. Committing an empty cache would cause InstanceExists to
+	// return false for every node, triggering mass node deletion.
+	if len(newNodes) == 0 && len(nc.nodes) > 0 {
+		return fmt.Errorf("ListInstances returned 0 instances but cache currently holds %d; refusing to overwrite cache with empty result", len(nc.nodes))
+	}
+
 	nc.nodes = newNodes
 	nc.lastUpdate = time.Now()
 	return nil

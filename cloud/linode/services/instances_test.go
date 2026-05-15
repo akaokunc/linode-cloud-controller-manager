@@ -47,10 +47,37 @@ func TestInstanceExists(t *testing.T) {
 	t.Run("should return false if linode does not exist (by providerID)", func(t *testing.T) {
 		instances := NewInstances(client)
 		node := nodeWithProviderID(ccmUtils.ProviderIDPrefix + "123")
-		client.EXPECT().ListInstances(gomock.Any(), nil).Times(1).Return([]linodego.Instance{}, nil)
+		// Return a non-empty list that does not contain the queried instance ID (456 != 123).
+		// An empty list would be rejected by the cache guard as a suspicious API response.
+		client.EXPECT().ListInstances(gomock.Any(), nil).Times(1).Return([]linodego.Instance{
+			{ID: 456, Label: "other-instance", Region: usEast, Type: typeG6},
+		}, nil)
 
 		exists, err := instances.InstanceExists(ctx, node)
 		require.NoError(t, err)
+		assert.False(t, exists)
+	})
+
+	t.Run("should return error when ListInstances returns empty list but cache was non-empty", func(t *testing.T) {
+		instances := NewInstances(client)
+		node := nodeWithProviderID(ccmUtils.ProviderIDPrefix + "123")
+
+		// First call: populate cache with an instance.
+		client.EXPECT().ListInstances(gomock.Any(), nil).Times(1).Return([]linodego.Instance{
+			{ID: 123, Label: "mock", Region: usEast, Type: typeG6},
+		}, nil)
+		exists, err := instances.InstanceExists(ctx, node)
+		require.NoError(t, err)
+		assert.True(t, exists)
+
+		// Expire the cache so the next call triggers a refresh.
+		instances.nodeCache.lastUpdate = instances.nodeCache.lastUpdate.Add(-instances.nodeCache.ttl - 1)
+
+		// Second call: API returns empty list (transient glitch). Cache should be
+		// preserved and an error returned — NOT false,nil which would delete the node.
+		client.EXPECT().ListInstances(gomock.Any(), nil).Times(1).Return([]linodego.Instance{}, nil)
+		exists, err = instances.InstanceExists(ctx, node)
+		require.Error(t, err)
 		assert.False(t, exists)
 	})
 
